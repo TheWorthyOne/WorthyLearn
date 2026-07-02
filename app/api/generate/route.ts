@@ -26,6 +26,25 @@ const systemPrompt = `You generate rigorous, structured learning syllabi. Return
 }
 Rules: create a clear hierarchy; avoid fluff; make subtopics concrete; children arrays can be nested up to requested depth; each node should be teachable.`;
 
+function extractJson(text: string) {
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?/i, "")
+    .replace(/```$/i, "")
+    .trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    }
+    throw new Error("The AI returned text instead of valid course JSON.");
+  }
+}
+
 function attachIds(course: Omit<Course, "id" | "createdAt">): Course {
   const withIds = (nodes: any[]): any[] => nodes.map((node) => ({
     id: makeId("node"),
@@ -68,23 +87,35 @@ export async function POST(req: Request) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120_000);
 
-    const aiRes = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: prompt },
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.45,
-      }),
-    }).finally(() => clearTimeout(timeout));
+    let aiRes: Response;
+
+    try {
+      aiRes = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: prompt },
+          ],
+          // Some OpenAI-compatible hosts reject strict JSON mode; the prompt and parser handle JSON instead.
+          temperature: 0.35,
+          max_tokens: 5000,
+        }),
+      });
+    } catch (err) {
+      const message = err instanceof Error && err.name === "AbortError"
+        ? "AI request timed out after 120 seconds. Try a lower depth or a more specific topic."
+        : "AI request could not be completed.";
+      return NextResponse.json({ error: message }, { status: 504 });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!aiRes.ok) {
       const text = await aiRes.text();
@@ -93,7 +124,14 @@ export async function POST(req: Request) {
 
     const data = await aiRes.json();
     const content = data.choices?.[0]?.message?.content || "{}";
-    const generated = JSON.parse(content);
+    let generated;
+    try {
+      generated = extractJson(content);
+    } catch (err) {
+      console.error("AI JSON parse failed", { err, content: content.slice(0, 1000) });
+      course = fallbackCourse(topic, audience, depth, format);
+      return NextResponse.json({ course, warning: "AI returned malformed JSON, so a fallback course was generated." });
+    }
     course = attachIds({
       topic,
       audience,
