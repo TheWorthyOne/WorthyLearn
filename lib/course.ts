@@ -1,12 +1,20 @@
 import { Course, CourseNode } from "./types";
 
-const fallbackTopics = [
-  "Foundations and mental models",
-  "Core concepts and vocabulary",
-  "Practical workflows",
-  "Common pitfalls and misconceptions",
-  "Projects and applied practice",
-  "Advanced extensions",
+const fallbackModules = [
+  "Foundational Concepts and Vocabulary",
+  "Structures, Systems, and Mechanisms",
+  "Core Processes and Regulation",
+  "Applied Analysis and Case Reasoning",
+  "Advanced Integration and Edge Cases",
+  "Projects, Practice, and Mastery",
+];
+
+const fallbackLessons = [
+  "Key terminology and conceptual map",
+  "Primary mechanisms and causal relationships",
+  "Important examples and representative cases",
+  "Common misconceptions and failure modes",
+  "Applied practice: guided analysis",
 ];
 
 export function makeId(prefix = "node") {
@@ -14,23 +22,6 @@ export function makeId(prefix = "node") {
 }
 
 export function fallbackCourse(topic: string, audience: string, depth: number, format: Course["format"]): Course {
-  const makeChildren = (parent: string, level: number): CourseNode[] => {
-    if (level >= depth) return [];
-    return ["What it is", "Why it matters", "How to apply it"].map((label, index) => ({
-      id: makeId("fallback"),
-      title: `${parent}: ${label}`,
-      summary: `A focused breakdown of ${label.toLowerCase()} for ${parent}.`,
-      learningObjectives: [
-        `Explain ${label.toLowerCase()} in plain language`,
-        `Recognize examples related to ${topic}`,
-        `Apply the idea in a small exercise`,
-      ],
-      estimatedMinutes: 18 + index * 7,
-      difficulty: level > 1 ? "intermediate" : "beginner",
-      children: makeChildren(`${parent} / ${label}`, level + 1),
-    }));
-  };
-
   return {
     id: makeId("course"),
     topic,
@@ -39,18 +30,32 @@ export function fallbackCourse(topic: string, audience: string, depth: number, f
     format,
     createdAt: new Date().toISOString(),
     overview: `A generated learning path for ${topic}, tuned for ${audience || "self-guided learners"}.`,
-    nodes: fallbackTopics.map((title, index) => ({
-      id: makeId("fallback"),
-      title,
-      summary: `A module covering ${title.toLowerCase()} in the context of ${topic}.`,
+    nodes: fallbackModules.map((title, moduleIndex) => ({
+      id: makeId("module"),
+      kind: "module",
+      title: `Module ${moduleIndex + 1}: ${title}`,
+      summary: `A major unit covering ${title.toLowerCase()} in the context of ${topic}.`,
       learningObjectives: [
-        `Understand the role of ${title.toLowerCase()} in ${topic}`,
-        `Connect this module to the larger learning path`,
-        `Complete a concrete practice task`,
+        `Build a structured mental model of ${title.toLowerCase()}`,
+        `Connect the module to the rest of ${topic}`,
+        `Apply the material through guided practice`,
       ],
-      estimatedMinutes: 30 + index * 10,
-      difficulty: index < 2 ? "beginner" : index < 4 ? "intermediate" : "advanced",
-      children: makeChildren(title, 1),
+      estimatedMinutes: 120,
+      difficulty: moduleIndex < 2 ? "beginner" : moduleIndex < 4 ? "intermediate" : "advanced",
+      children: fallbackLessons.map((lesson, lessonIndex) => ({
+        id: makeId("lesson"),
+        kind: "lesson",
+        title: lesson,
+        summary: `A focused lesson on ${lesson.toLowerCase()} for ${topic}.`,
+        learningObjectives: [
+          `Explain the key ideas clearly`,
+          `Recognize high-yield patterns and examples`,
+          `Use the concept in a realistic scenario`,
+        ],
+        estimatedMinutes: 25 + lessonIndex * 5,
+        difficulty: moduleIndex < 2 ? "beginner" : moduleIndex < 4 ? "intermediate" : "advanced",
+        children: [],
+      })),
     })),
   };
 }

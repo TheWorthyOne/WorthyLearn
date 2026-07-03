@@ -2,31 +2,36 @@
 
 import { CourseNode } from "@/lib/types";
 
-type Props = { topic: string; nodes: CourseNode[] };
+type Props = {
+  topic: string;
+  nodes: CourseNode[];
+  onLessonSelect: (module: CourseNode, lesson: CourseNode, lessonNumber: string) => void;
+};
 
-export function MindMap({ topic, nodes }: Props) {
+export function MindMap({ topic, nodes, onLessonSelect }: Props) {
   return (
-    <div className="mindmap" aria-label="Course mind map">
-      <div className="mindmap-root">{topic}</div>
-      <div className="mindmap-branches">
-        {nodes.map((node) => <MindNode key={node.id} node={node} />)}
+    <div className="roadmap-map" aria-label="Course mind map">
+      <div className="map-title">{topic}</div>
+      <div className="map-spine" />
+      <div className="map-modules">
+        {nodes.map((module, moduleIndex) => (
+          <div className="map-module-row" key={module.id}>
+            <div className="map-lessons left">
+              {module.children.filter((_, i) => i % 2 === 0).map((lesson, i) => {
+                const originalIndex = i * 2;
+                return <button key={lesson.id} onClick={() => onLessonSelect(module, lesson, `${moduleIndex + 1}.${originalIndex + 1}`)}>{lesson.title}</button>;
+              })}
+            </div>
+            <div className="map-module">{module.title.replace(/^Module\s+\d+\s*:\s*/i, "")}</div>
+            <div className="map-lessons right">
+              {module.children.filter((_, i) => i % 2 === 1).map((lesson, i) => {
+                const originalIndex = i * 2 + 1;
+                return <button key={lesson.id} onClick={() => onLessonSelect(module, lesson, `${moduleIndex + 1}.${originalIndex + 1}`)}>{lesson.title}</button>;
+              })}
+            </div>
+          </div>
+        ))}
       </div>
-    </div>
-  );
-}
-
-function MindNode({ node }: { node: CourseNode }) {
-  return (
-    <div className="mind-node-wrap">
-      <div className="mind-node">
-        <strong>{node.title}</strong>
-        <small>{node.difficulty}</small>
-      </div>
-      {node.children.length > 0 && (
-        <div className="mind-children">
-          {node.children.map((child) => <MindNode key={child.id} node={child} />)}
-        </div>
-      )}
     </div>
   );
 }
