@@ -64,6 +64,24 @@ function attachIds(course: Omit<Course, "id" | "createdAt">): Course {
   };
 }
 
+function getModelLineup() {
+  const primary = process.env.AI_MODEL || "AdaptLLM/medicine-chat";
+  const fallbacks = (process.env.AI_FALLBACK_MODELS || "Henrychur/MMed-Llama-3-8B,baichuan-inc/Baichuan-M2-32B")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set([primary, ...fallbacks]));
+}
+
+function shouldTryNextModel(status: number, body: string) {
+  return status >= 500
+    || body.includes("capacity_exhausted")
+    || body.includes("model_not_deployed")
+    || body.includes("model_not_found")
+    || body.includes("temporarily at capacity");
+}
+
 export async function POST(req: Request) {
   const parsed = requestSchema.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) {
@@ -73,7 +91,8 @@ export async function POST(req: Request) {
   const { topic, audience, depth, format, parentPath } = parsed.data;
   const apiKey = process.env.AI_API_KEY;
   const baseUrl = process.env.AI_BASE_URL || "https://api.openai.com/v1";
-  const model = process.env.AI_MODEL || "gpt-4o-mini";
+  const models = getModelLineup();
+  const maxTokens = Number(process.env.AI_MAX_TOKENS || 3500);
 
   let course: Course;
 
@@ -84,54 +103,67 @@ export async function POST(req: Request) {
       ? `Expand this branch of a course on "${topic}" for ${audience}: ${parentPath.join(" > ")}. Generate children to depth ${depth}.`
       : `Create a ${format} syllabus for "${topic}" for ${audience}. Use depth ${depth}.`;
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120_000);
-
-    let aiRes: Response;
-
-    try {
-      aiRes = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: prompt },
-          ],
-          // Some OpenAI-compatible hosts reject strict JSON mode; the prompt and parser handle JSON instead.
-          temperature: 0.35,
-          max_tokens: 5000,
-        }),
-      });
-    } catch (err) {
-      const message = err instanceof Error && err.name === "AbortError"
-        ? "AI request timed out after 120 seconds. Try a lower depth or a more specific topic."
-        : "AI request could not be completed.";
-      return NextResponse.json({ error: message }, { status: 504 });
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (!aiRes.ok) {
-      const text = await aiRes.text();
-      return NextResponse.json({ error: `AI request failed: ${text}` }, { status: 502 });
-    }
-
-    const data = await aiRes.json();
-    const content = data.choices?.[0]?.message?.content || "{}";
+    const attempts: string[] = [];
     let generated;
-    try {
-      generated = extractJson(content);
-    } catch (err) {
-      console.error("AI JSON parse failed", { err, content: content.slice(0, 1000) });
-      course = fallbackCourse(topic, audience, depth, format);
-      return NextResponse.json({ course, warning: "AI returned malformed JSON, so a fallback course was generated." });
+
+    for (const model of models) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120_000);
+
+      try {
+        const aiRes = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: prompt },
+            ],
+            // Some OpenAI-compatible hosts reject strict JSON mode; the prompt and parser handle JSON instead.
+            temperature: 0.35,
+            max_tokens: maxTokens,
+          }),
+        });
+
+        if (!aiRes.ok) {
+          const text = await aiRes.text();
+          attempts.push(`${model}: ${text.slice(0, 240)}`);
+          if (shouldTryNextModel(aiRes.status, text)) continue;
+          return NextResponse.json({ error: `AI request failed: ${text}` }, { status: 502 });
+        }
+
+        const data = await aiRes.json();
+        const content = data.choices?.[0]?.message?.content || "{}";
+        try {
+          generated = extractJson(content);
+          break;
+        } catch (err) {
+          console.error("AI JSON parse failed", { model, err, content: content.slice(0, 1000) });
+          attempts.push(`${model}: malformed JSON`);
+        }
+      } catch (err) {
+        const message = err instanceof Error && err.name === "AbortError"
+          ? "timed out after 120 seconds"
+          : "request could not be completed";
+        attempts.push(`${model}: ${message}`);
+      } finally {
+        clearTimeout(timeout);
+      }
     }
+
+    if (!generated) {
+      course = fallbackCourse(topic, audience, depth, format);
+      return NextResponse.json({
+        course,
+        warning: `All configured AI models failed, so a fallback course was generated. Attempts: ${attempts.join(" | ")}`,
+      });
+    }
+
     course = attachIds({
       topic,
       audience,
